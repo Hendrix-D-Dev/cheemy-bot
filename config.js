@@ -1,13 +1,31 @@
 ﻿require('dotenv').config();
 
+// Helper function to format phone numbers
+function formatPhoneNumber(number) {
+    if (!number) return number;
+    // Remove any non-numeric characters
+    let cleaned = number.replace(/\D/g, '');
+    // If it starts with 0, remove it and add 234 (Nigeria country code)
+    if (cleaned.startsWith('0')) {
+        cleaned = '234' + cleaned.substring(1);
+    }
+    // If it doesn't have country code, add 234
+    if (cleaned.length === 10) {
+        cleaned = '234' + cleaned;
+    }
+    return cleaned;
+}
+
 module.exports = {
     // Bot Settings
-    botNumber: process.env.BOT_NUMBER,
-    botName: 'CHEEMY-BOT', // Changed to CHEEMY-BOT
+    botNumber: formatPhoneNumber(process.env.BOT_NUMBER),
+    botName: 'CHEEMY-BOT',
     prefix: process.env.PREFIX || '.',
     
-    // Owner/Admin Settings
-    ownerNumber: process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : ['09043650490'],
+    // Owner/Admin Settings - Format all numbers
+    ownerNumber: process.env.ADMIN_NUMBERS 
+        ? process.env.ADMIN_NUMBERS.split(',').map(num => formatPhoneNumber(num.trim()))
+        : ['2349043650490'],
     
     // AI Settings
     ai: {
@@ -20,7 +38,7 @@ module.exports = {
     
     // Memory Settings
     memory: {
-        duration: parseInt(process.env.MEMORY_DURATION) || 30, // minutes
+        duration: parseInt(process.env.MEMORY_DURATION) || 30,
         maxSize: parseInt(process.env.MAX_MEMORY_SIZE) || 100
     },
     
@@ -40,7 +58,7 @@ module.exports = {
     
     // Media Settings
     media: {
-        maxSize: parseInt(process.env.MAX_FILE_SIZE) || 100, // MB
+        maxSize: parseInt(process.env.MAX_FILE_SIZE) || 100,
         cleanup: process.env.TEMP_FILE_CLEANUP === 'true',
         saveMedia: process.env.SAVE_MEDIA === 'true',
         savePath: './media/'

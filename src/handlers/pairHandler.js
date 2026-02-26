@@ -9,6 +9,22 @@ function setGeneratedCode(code) {
     generatedCode = code;
 }
 
+// Format phone number helper
+function formatPhoneNumber(number) {
+    if (!number) return config.ownerNumber[0];
+    // Remove any non-numeric characters
+    let cleaned = number.replace(/\D/g, '');
+    // If it starts with 0, remove it and add 234
+    if (cleaned.startsWith('0')) {
+        cleaned = '234' + cleaned.substring(1);
+    }
+    // If it's 10 digits, add 234
+    if (cleaned.length === 10) {
+        cleaned = '234' + cleaned;
+    }
+    return cleaned;
+}
+
 async function handlePairCommand(sock, sender, command, args, senderId) {
     const isOwner = config.ownerNumber.includes(getJidNumber(senderId));
     
@@ -23,7 +39,8 @@ async function handlePairCommand(sock, sender, command, args, senderId) {
     switch(command) {
         case 'pair':
         case 'paircode':
-            const phoneNumber = args[0] || config.ownerNumber[0];
+            const rawNumber = args[0] || config.ownerNumber[0];
+            const phoneNumber = formatPhoneNumber(rawNumber);
             
             await sock.sendMessage(sender, { text: '🔄 Generating pairing code...' });
             
@@ -53,7 +70,7 @@ async function handlePairCommand(sock, sender, command, args, senderId) {
                 
             } catch (error) {
                 await sock.sendMessage(sender, { 
-                    text: `❌ Failed to generate code: ${error.message}` 
+                    text: `❌ Failed to generate code: ${error.message}\n\nMake sure the phone number format is correct (e.g., 2349043650490)` 
                 });
             }
             break;
@@ -80,7 +97,8 @@ async function handlePairCommand(sock, sender, command, args, senderId) {
                 `2. Get 8-digit code\n` +
                 `3. Open WhatsApp → Linked Devices → Link with phone number\n` +
                 `4. Enter the code\n\n` +
-                `*Note:* Code auto-generates on every deploy!`;
+                `*Important:* Use international format without leading zero\n` +
+                `*Example:* 2349043650490 (not 09043650490)`;
             
             await sock.sendMessage(sender, { text: helpText });
             break;
