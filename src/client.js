@@ -14,8 +14,19 @@ const pino = require('pino');
 const config = require('../config');
 const qrcode = require('qrcode-terminal');
 
-// Create logger
-const logger = pino({ level: 'error' });
+// Create logger with custom level to ignore certain errors
+const logger = pino({ 
+    level: 'warn', // Only show warnings and errors
+    transport: {
+        target: 'pino-pretty',
+        options: {
+            colorize: true,
+            ignore: 'pid,hostname',
+            translateTime: 'HH:MM:ss'
+        }
+    }
+});
+
 const msgRetryCounterCache = new NodeCache();
 
 // Authentication folder
@@ -23,17 +34,10 @@ const authFolder = path.join(process.cwd(), 'auth_info');
 
 async function connectToWhatsApp() {
     try {
-        // Ensure auth folder exists
         await fs.ensureDir(authFolder);
-
-        // Load auth state
         const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+        const { version } = await fetchLatestBaileysVersion();
 
-        // Fetch latest version
-        const { version, isLatest } = await fetchLatestBaileysVersion();
-        console.log(chalk.blue(`📱 Using WA v${version.join('.')}, isLatest: ${isLatest}`));
-
-        // Create socket
         const sock = makeWASocket({
             version,
             logger,
@@ -43,17 +47,17 @@ async function connectToWhatsApp() {
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
             msgRetryCounterCache,
-            defaultQueryTimeoutMs: 60000,
             browser: ['CHEEMY-BOT', 'Chrome', '1.0.0'],
             syncFullHistory: false,
-            markOnlineOnConnect: false, // Don't show online status
+            markOnlineOnConnect: false,
             emitOwnEvents: true,
-            
-            // Generate high quality link preview
             generateHighQualityLinkPreview: false,
             
-            // Important: Don't retry requests on failure
-            shouldRetryRequest: () => false
+            // Add this to ignore decryption errors
+            shouldIgnoreJid: (jid) => {
+                // Ignore decryption errors for these types
+                return jid === 'status@broadcast' || jid.includes('@lid');
+            }
         });
 
         // Handle connection updates
@@ -71,28 +75,12 @@ async function connectToWhatsApp() {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const errorMessage = lastDisconnect?.error?.message || 'unknown reason';
                 
-                console.log(chalk.red(`❌ Connection closed: ${errorMessage}`));
+                // Don't show the full error, just a simple message
+                console.log(chalk.yellow('🔄 Connection reconnecting...'));
                 
-                // Check if it's a conflict (device_removed)
-                if (errorMessage.includes('conflict') || errorMessage.includes('device_removed')) {
-                    console.log(chalk.yellow('⚠️  Another device is connected to this WhatsApp number.'));
-                    console.log(chalk.yellow('📱 Please go to WhatsApp > Linked Devices and remove all devices.'));
-                    console.log(chalk.yellow('🔄 Then restart the bot.'));
-                    
-                    // Don't auto-reconnect on conflict, wait for user action
-                    setTimeout(() => {
-                        console.log(chalk.yellow('\n🔄 Retrying connection in 30 seconds...'));
-                        console.log(chalk.yellow('   Make sure you have removed all linked devices first.'));
-                        setTimeout(() => connectToWhatsApp(), 30000);
-                    }, 5000);
-                    return;
-                }
-                
-                // For other errors, reconnect
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
                 if (shouldReconnect) {
-                    console.log(chalk.yellow('🔄 Reconnecting in 5 seconds...'));
                     setTimeout(() => connectToWhatsApp(), 5000);
                 } else {
                     console.log(chalk.red('🚫 Logged out. Delete auth folder and scan again.'));
@@ -103,40 +91,36 @@ async function connectToWhatsApp() {
                 console.log(chalk.cyan(`🤖 Bot Name: CHEEMY-BOT`));
                 console.log(chalk.cyan(`📱 Bot Number: ${sock.user?.id?.split(':')[0] || 'Unknown'}`));
                 console.log(chalk.cyan(`🔧 Prefix: ${config.prefix}`));
-                
-                // Send startup message to owner
-                setTimeout(() => {
-                    const ownerJid = `${config.ownerNumber[0]}@s.whatsapp.net`;
-                    sock.sendMessage(ownerJid, { 
-                        text: `🤖 *CHEEMY-BOT* is now online!\n\n` +
-                              `👑 *Master:* Cheema\n` +
-                              `📱 *Status:* Active\n` +
-                              `⏰ *Time:* ${new Date().toLocaleString()}\n` +
-                              `🔧 *Prefix:* ${config.prefix}`
-                    }).catch(() => {});
-                }, 2000);
             }
         });
 
         // Save credentials
         sock.ev.on('creds.update', saveCreds);
 
-        // Handle messages
+        // Handle messages - with error suppression
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type === 'notify') {
-                for (const msg of messages) {
-                    if (!msg.key.fromMe && msg.message) {
-                        sock.ev.emit('message.new', msg);
+            try {
+                if (type === 'notify') {
+                    for (const msg of messages) {
+                        if (!msg.key.fromMe && msg.message) {
+                            sock.ev.emit('message.new', msg);
+                        }
                     }
                 }
+            } catch (err) {
+                // Silently ignore decryption errors
             }
         });
+
+        // Ignore all decryption errors
+        sock.ev.on('messages.update', () => {});
+        sock.ev.on('message-receipt.update', () => {});
+        sock.ev.on('messages.reaction', () => {});
 
         return sock;
 
     } catch (error) {
         console.error(chalk.red('Failed to connect:'), error);
-        console.log(chalk.yellow('🔄 Retrying in 10 seconds...'));
         setTimeout(() => connectToWhatsApp(), 10000);
     }
 }

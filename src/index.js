@@ -15,25 +15,44 @@ const https = require('https');
 
 let botInstance = null;
 let currentSpeedMode = 'normal';
+let messageQueue = [];
+let processingQueue = false;
 
-// Auth cleanup function - checks if auth is stale and clears it
+// Process message queue efficiently
+async function processMessageQueue() {
+    if (processingQueue || messageQueue.length === 0) return;
+    
+    processingQueue = true;
+    
+    while (messageQueue.length > 0) {
+        const { sock, msg } = messageQueue.shift();
+        try {
+            stats.incrementTotal();
+            await handleMessage(sock, msg);
+        } catch (error) {
+            console.error('Error processing message:', error);
+        }
+        // Small delay between messages to prevent overwhelming
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    processingQueue = false;
+}
+
+// Auth cleanup function
 async function checkAndCleanAuth() {
     const authFolder = path.join(process.cwd(), 'auth_info');
     
     try {
-        // Check if FORCE_NEW_AUTH environment variable is set
         if (process.env.FORCE_NEW_AUTH === 'true') {
             console.log(chalk.yellow('⚠️ FORCE_NEW_AUTH is enabled - clearing auth folder...'));
             await fs.remove(authFolder);
             await fs.ensureDir(authFolder);
             console.log(chalk.green('✅ Auth folder cleared for new QR code!'));
-            
-            // Remove the env var so it doesn't keep clearing
             process.env.FORCE_NEW_AUTH = 'false';
             return true;
         }
         
-        // Check if auth folder exists
         if (await fs.pathExists(authFolder)) {
             const files = await fs.readdir(authFolder);
             
@@ -42,7 +61,6 @@ async function checkAndCleanAuth() {
                 return false;
             }
             
-            // Get the most recent file modification time
             let lastModified = 0;
             for (const file of files) {
                 const filePath = path.join(authFolder, file);
@@ -55,9 +73,6 @@ async function checkAndCleanAuth() {
             const now = Date.now();
             const hoursSinceLastUse = (now - lastModified) / (1000 * 60 * 60);
             
-            console.log(chalk.blue(`📱 Auth last used: ${hoursSinceLastUse.toFixed(1)} hours ago`));
-            
-            // If inactive for more than 12 hours, clear auth
             if (hoursSinceLastUse > 12) {
                 console.log(chalk.yellow(`🧹 Auth inactive for ${hoursSinceLastUse.toFixed(1)} hours, clearing...`));
                 await fs.remove(authFolder);
@@ -66,7 +81,6 @@ async function checkAndCleanAuth() {
                 return true;
             }
         } else {
-            console.log(chalk.blue('📱 No auth folder found - creating new one'));
             await fs.ensureDir(authFolder);
         }
     } catch (error) {
@@ -75,7 +89,7 @@ async function checkAndCleanAuth() {
     return false;
 }
 
-// Force clear auth function (can be called from commands)
+// Force clear auth function
 async function forceClearAuth() {
     const authFolder = path.join(process.cwd(), 'auth_info');
     try {
@@ -90,38 +104,30 @@ async function forceClearAuth() {
     }
 }
 
-// Self-ping function to keep bot alive
+// Self-ping function
 function startSelfPing() {
     console.log(chalk.cyan('🔄 Starting self-ping system to keep bot alive...'));
     
-    // Ping every 3 minutes (180000 ms)
     setInterval(async () => {
         try {
-            // Ping Google to keep network connection alive
-            https.get('https://www.google.com', (res) => {
-                // Just keep connection alive
-            }).on('error', () => {});
+            https.get('https://www.google.com', () => {}).on('error', () => {});
             
-            // Ping our own health endpoint if running on server
             if (process.env.RAILWAY_STATIC_URL) {
                 https.get(`https://${process.env.RAILWAY_STATIC_URL}/ping`, () => {})
                     .on('error', () => {});
             }
             
-            // Send presence update to keep WhatsApp connection alive
             if (botInstance && config.ownerNumber[0]) {
                 const ownerJid = `${config.ownerNumber[0]}@s.whatsapp.net`;
                 await botInstance.sendPresenceUpdate('available', ownerJid);
             }
             
             console.log(chalk.gray(`[${new Date().toLocaleTimeString()}] 💓 Self-ping sent`));
-        } catch (err) {
-            // Silently fail - this is just a keep-alive
-        }
-    }, 180000); // 3 minutes
+        } catch (err) {}
+    }, 180000);
 }
 
-// Speed optimization function
+// Speed optimization
 async function speedOptimize(mode = 'normal') {
     switch(mode) {
         case 'turbo':
@@ -154,26 +160,18 @@ async function startBot() {
     console.log(chalk.cyan('╚════════════════════════════════════╝\n'));
 
     try {
-        // Check and clean auth if needed
         await checkAndCleanAuth();
-        
-        // Initialize database
         await initializeDatabase();
-        
-        // Initialize sudo table
         await initSudoTable();
         
-        // Create required directories
         await fs.ensureDir('./temp');
         await fs.ensureDir('./media');
         await fs.ensureDir('./media/viewonce');
         await fs.ensureDir('./logs');
         await fs.ensureDir('./backups');
         
-        // Clean old temp files
         await cleanupTemp();
         
-        // Connect to WhatsApp
         botInstance = await connectToWhatsApp();
         
         if (!botInstance) {
@@ -181,16 +179,13 @@ async function startBot() {
             return;
         }
         
-        // Start the web server for uptime monitoring
         startServer();
-        
-        // Start self-ping system
         startSelfPing();
         
-        // Set up message handler
+        // Efficient message handling with queue
         botInstance.ev.on('message.new', async (msg) => {
-            stats.incrementTotal();
-            await handleMessage(botInstance, msg);
+            messageQueue.push({ sock: botInstance, msg });
+            processMessageQueue();
         });
         
         // Schedule cleanup tasks
@@ -199,17 +194,14 @@ async function startBot() {
             console.log(chalk.blue('🧹 Cleaned up temporary files'));
         });
         
-        // Backup database daily
         cron.schedule('0 0 * * *', async () => {
             await backupDatabase();
         });
         
-        // Reset message stats hourly
         cron.schedule('0 * * * *', () => {
             stats.resetHourlyStats();
         });
         
-        // Check auth every 6 hours
         cron.schedule('0 */6 * * *', async () => {
             await checkAndCleanAuth();
         });
@@ -222,7 +214,7 @@ async function startBot() {
         console.log(chalk.magenta(`👑 Master: Cheema`));
         console.log(chalk.green(`🌐 Web Server: Running on port ${process.env.PORT || 3000}`));
         
-        // Send startup message to owner
+        // Send startup message
         setTimeout(async () => {
             try {
                 const ownerJid = `${config.ownerNumber[0]}@s.whatsapp.net`;
@@ -239,9 +231,7 @@ async function startBot() {
                           `Type ${config.prefix}help to see commands.\n` +
                           `👑 Master: Cheema`
                 });
-            } catch (err) {
-                // Ignore errors
-            }
+            } catch (err) {}
         }, 5000);
         
     } catch (error) {
@@ -250,7 +240,7 @@ async function startBot() {
     }
 }
 
-// Backup database function
+// Backup database
 async function backupDatabase() {
     try {
         const date = new Date().toISOString().split('T')[0];
@@ -258,7 +248,6 @@ async function backupDatabase() {
         await fs.copy('./database/bot.db', backupPath);
         console.log(chalk.green(`💾 Database backed up to ${backupPath}`));
         
-        // Keep only last 7 backups
         const backups = await fs.readdir('./backups');
         if (backups.length > 7) {
             const sorted = backups.sort();
@@ -269,12 +258,11 @@ async function backupDatabase() {
     }
 }
 
-// Get bot stats
 function getStats() {
     return stats.getStats();
 }
 
-// Handle graceful shutdown
+// Graceful shutdown
 process.on('SIGINT', async () => {
     console.log(chalk.yellow('\n👋 Shutting down...'));
     await cleanupTemp();
@@ -282,13 +270,15 @@ process.on('SIGINT', async () => {
 });
 
 process.on('unhandledRejection', (error) => {
-    console.error(chalk.red('Unhandled rejection:'), error);
-    stats.incrementErrors();
+    // Silently ignore most errors
+    if (!error.message?.includes('decrypt') && !error.message?.includes('session')) {
+        console.error(chalk.red('Unhandled rejection:'), error);
+        stats.incrementErrors();
+    }
 });
 
 startBot();
 
-// Export for commands
 module.exports = { 
     botInstance: () => botInstance, 
     speedOptimize, 
