@@ -1,6 +1,7 @@
 const express = require('express');
 const chalk = require('chalk');
 const path = require('path');
+const fs = require('fs-extra');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -123,6 +124,19 @@ app.get('/', (req, res) => {
                         50% { transform: scale(1.1); opacity: 0.8; }
                         100% { transform: scale(1); opacity: 1; }
                     }
+                    .auth-status {
+                        background: rgba(0,0,0,0.3);
+                        border-radius: 10px;
+                        padding: 15px;
+                        margin-top: 20px;
+                        font-size: 0.9em;
+                    }
+                    .auth-active {
+                        color: #4cff4c;
+                    }
+                    .auth-stale {
+                        color: #ff6b6b;
+                    }
                 </style>
             </head>
             <body>
@@ -154,11 +168,16 @@ app.get('/', (req, res) => {
                         <div class="ping">
                             📡 Next ping in <span id="countdown">3:00</span>
                         </div>
+                        
+                        <div class="auth-status" id="authStatus">
+                            🔐 Loading auth status...
+                        </div>
                     </div>
                     
                     <div class="footer">
                         <p>⚡ Running 24/7 for Master Cheema ⚡</p>
                         <p>Last heartbeat: ${new Date().toLocaleString()}</p>
+                        <p>🔄 Auto auth cleanup every 12 hours</p>
                     </div>
                 </div>
                 
@@ -196,22 +215,49 @@ app.get('/', (req, res) => {
                         }
                     }
                     
+                    async function updateAuthStatus() {
+                        try {
+                            const response = await fetch('/auth-status');
+                            const data = await response.json();
+                            
+                            const authDiv = document.getElementById('authStatus');
+                            if (data.status === 'active') {
+                                const hours = parseFloat(data.auth_age.hours);
+                                const statusClass = hours > 12 ? 'auth-stale' : 'auth-active';
+                                authDiv.innerHTML = \`
+                                    🔐 <span class="\${statusClass}">Auth Active</span><br>
+                                    Last active: \${data.auth_age.minutes} minutes ago<br>
+                                    \${hours > 12 ? '⚠️ Needs cleanup' : '✅ Healthy'}
+                                \`;
+                            } else if (data.qr_needed) {
+                                authDiv.innerHTML = '🔐 <span class="auth-stale">QR Code Ready - Scan to connect</span>';
+                            } else {
+                                authDiv.innerHTML = '🔐 <span class="auth-stale">No Auth - Waiting for QR scan</span>';
+                            }
+                        } catch (err) {
+                            console.error('Failed to fetch auth status:', err);
+                        }
+                    }
+                    
                     setInterval(function() {
                         updateUptime();
                         updateCountdown();
                     }, 1000);
                     
-                    // Ping endpoint to update last ping time
+                    setInterval(updateAuthStatus, 10000); // Update auth status every 10 seconds
+                    
+                    // Initial calls
                     fetch('/ping').then(function() {
                         lastPingTime = Date.now();
                     });
+                    updateAuthStatus();
                 </script>
             </body>
         </html>
     `);
 });
 
-// Health check endpoint for Railway
+// Health check endpoint
 app.get('/health', (req, res) => {
     const uptime = Math.floor((Date.now() - startTime) / 1000);
     res.json({ 
@@ -248,11 +294,95 @@ app.get('/stats', (req, res) => {
     });
 });
 
+// Auth status endpoint
+app.get('/auth-status', async (req, res) => {
+    const authFolder = path.join(process.cwd(), 'auth_info');
+    
+    try {
+        if (!await fs.pathExists(authFolder)) {
+            return res.json({ 
+                status: 'no_auth',
+                message: 'No auth folder found - waiting for QR scan',
+                qr_needed: true
+            });
+        }
+        
+        const files = await fs.readdir(authFolder);
+        
+        if (files.length === 0) {
+            return res.json({
+                status: 'empty',
+                message: 'Auth folder is empty - ready for QR scan',
+                qr_needed: true
+            });
+        }
+        
+        // Get last modified time
+        let lastModified = 0;
+        for (const file of files) {
+            const filePath = path.join(authFolder, file);
+            const stats = await fs.stat(filePath);
+            if (stats.mtimeMs > lastModified) {
+                lastModified = stats.mtimeMs;
+            }
+        }
+        
+        const now = Date.now();
+        const hoursSinceLastUse = (now - lastModified) / (1000 * 60 * 60);
+        const minutesSinceLastUse = Math.floor((now - lastModified) / (1000 * 60));
+        
+        res.json({
+            status: 'active',
+            auth_age: {
+                hours: hoursSinceLastUse.toFixed(1),
+                minutes: minutesSinceLastUse,
+                last_active: new Date(lastModified).toISOString()
+            },
+            files: files.length,
+            needs_cleanup: hoursSinceLastUse > 12,
+            qr_needed: false
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Force clear auth endpoint (protected by secret)
+app.get('/force-clear-auth', async (req, res) => {
+    const secret = req.query.secret;
+    const AUTH_SECRET = process.env.AUTH_CLEAR_SECRET || 'cheema-clear-123';
+    
+    if (secret !== AUTH_SECRET) {
+        return res.status(401).json({ error: 'Unauthorized - Invalid secret' });
+    }
+    
+    const authFolder = path.join(process.cwd(), 'auth_info');
+    
+    try {
+        console.log(chalk.red('🧹 Auth cleared via web endpoint!'));
+        await fs.remove(authFolder);
+        await fs.ensureDir(authFolder);
+        
+        res.json({ 
+            success: true, 
+            message: 'Auth folder cleared. Bot will generate new QR code.',
+            timestamp: new Date().toISOString()
+        });
+        
+        // Restart bot after 2 seconds
+        setTimeout(() => process.exit(0), 2000);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 function startServer() {
     app.listen(PORT, '0.0.0.0', () => {
         console.log(chalk.green(`🌐 Status server running on port ${PORT}`));
         console.log(chalk.cyan(`📊 Health check: http://localhost:${PORT}/health`));
         console.log(chalk.cyan(`📡 Ping endpoint: http://localhost:${PORT}/ping`));
+        console.log(chalk.cyan(`🔐 Auth status: http://localhost:${PORT}/auth-status`));
+        console.log(chalk.yellow(`⚠️  Force clear auth: http://localhost:${PORT}/force-clear-auth?secret=cheema-clear-123`));
         
         if (process.env.RAILWAY_STATIC_URL) {
             console.log(chalk.magenta(`🚀 Railway URL: https://${process.env.RAILWAY_STATIC_URL}`));

@@ -8,6 +8,7 @@ const stats = require('./utils/stats');
 const chalk = require('chalk');
 const cron = require('node-cron');
 const fs = require('fs-extra');
+const path = require('path');
 const config = require('../config');
 const antiBan = require('./utils/antiban');
 const https = require('https');
@@ -15,11 +16,85 @@ const https = require('https');
 let botInstance = null;
 let currentSpeedMode = 'normal';
 
+// Auth cleanup function - checks if auth is stale and clears it
+async function checkAndCleanAuth() {
+    const authFolder = path.join(process.cwd(), 'auth_info');
+    
+    try {
+        // Check if FORCE_NEW_AUTH environment variable is set
+        if (process.env.FORCE_NEW_AUTH === 'true') {
+            console.log(chalk.yellow('⚠️ FORCE_NEW_AUTH is enabled - clearing auth folder...'));
+            await fs.remove(authFolder);
+            await fs.ensureDir(authFolder);
+            console.log(chalk.green('✅ Auth folder cleared for new QR code!'));
+            
+            // Remove the env var so it doesn't keep clearing
+            process.env.FORCE_NEW_AUTH = 'false';
+            return true;
+        }
+        
+        // Check if auth folder exists
+        if (await fs.pathExists(authFolder)) {
+            const files = await fs.readdir(authFolder);
+            
+            if (files.length === 0) {
+                console.log(chalk.blue('📱 Auth folder is empty - ready for new QR code'));
+                return false;
+            }
+            
+            // Get the most recent file modification time
+            let lastModified = 0;
+            for (const file of files) {
+                const filePath = path.join(authFolder, file);
+                const stats = await fs.stat(filePath);
+                if (stats.mtimeMs > lastModified) {
+                    lastModified = stats.mtimeMs;
+                }
+            }
+            
+            const now = Date.now();
+            const hoursSinceLastUse = (now - lastModified) / (1000 * 60 * 60);
+            
+            console.log(chalk.blue(`📱 Auth last used: ${hoursSinceLastUse.toFixed(1)} hours ago`));
+            
+            // If inactive for more than 12 hours, clear auth
+            if (hoursSinceLastUse > 12) {
+                console.log(chalk.yellow(`🧹 Auth inactive for ${hoursSinceLastUse.toFixed(1)} hours, clearing...`));
+                await fs.remove(authFolder);
+                await fs.ensureDir(authFolder);
+                console.log(chalk.green('✅ Auth folder cleared. New QR code will be generated.'));
+                return true;
+            }
+        } else {
+            console.log(chalk.blue('📱 No auth folder found - creating new one'));
+            await fs.ensureDir(authFolder);
+        }
+    } catch (error) {
+        console.error('Error checking auth:', error);
+    }
+    return false;
+}
+
+// Force clear auth function (can be called from commands)
+async function forceClearAuth() {
+    const authFolder = path.join(process.cwd(), 'auth_info');
+    try {
+        console.log(chalk.yellow('🧹 Force clearing auth folder...'));
+        await fs.remove(authFolder);
+        await fs.ensureDir(authFolder);
+        console.log(chalk.green('✅ Auth folder cleared!'));
+        return true;
+    } catch (error) {
+        console.error('Error clearing auth:', error);
+        return false;
+    }
+}
+
 // Self-ping function to keep bot alive
 function startSelfPing() {
     console.log(chalk.cyan('🔄 Starting self-ping system to keep bot alive...'));
     
-    // Ping every 3 minutes (180000 ms) - more frequent than Railway's sleep timer
+    // Ping every 3 minutes (180000 ms)
     setInterval(async () => {
         try {
             // Ping Google to keep network connection alive
@@ -75,9 +150,13 @@ async function startBot() {
     console.log(chalk.cyan('║     🤖 CHEEMY-BOT v2.0            ║'));
     console.log(chalk.cyan('║    🛡️ Anti-Ban Protection Active   ║'));
     console.log(chalk.cyan('║    ⏰ 24/7 Keep-Alive System       ║'));
+    console.log(chalk.cyan('║    🧹 Auto Auth Cleanup (12h)      ║'));
     console.log(chalk.cyan('╚════════════════════════════════════╝\n'));
 
     try {
+        // Check and clean auth if needed
+        await checkAndCleanAuth();
+        
         // Initialize database
         await initializeDatabase();
         
@@ -105,6 +184,9 @@ async function startBot() {
         // Start the web server for uptime monitoring
         startServer();
         
+        // Start self-ping system
+        startSelfPing();
+        
         // Set up message handler
         botInstance.ev.on('message.new', async (msg) => {
             stats.incrementTotal();
@@ -127,6 +209,11 @@ async function startBot() {
             stats.resetHourlyStats();
         });
         
+        // Check auth every 6 hours
+        cron.schedule('0 */6 * * *', async () => {
+            await checkAndCleanAuth();
+        });
+        
         console.log(chalk.green('\n✅ CHEEMY-BOT is ready!'));
         console.log(chalk.yellow(`📝 Prefix: ${config.prefix}`));
         console.log(chalk.yellow(`🤖 AI: ${config.ai.enabled ? 'Enabled' : 'Disabled'}`));
@@ -146,6 +233,7 @@ async function startBot() {
                           `• Uptime: Just started\n` +
                           `• Anti-Ban: Active ✅\n` +
                           `• 24/7 Keep-Alive: Active 🔄\n` +
+                          `• Auto Auth Cleanup: 12h ⏰\n` +
                           `• Sudo Users: Enabled\n` +
                           `• Prefix: ${config.prefix}\n\n` +
                           `Type ${config.prefix}help to see commands.\n` +
@@ -204,5 +292,6 @@ startBot();
 module.exports = { 
     botInstance: () => botInstance, 
     speedOptimize, 
-    getStats
+    getStats,
+    forceClearAuth
 };
