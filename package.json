@@ -4,9 +4,12 @@
     "description": "Advanced WhatsApp Bot with AI, Games, Admin Features",
     "main": "src/index.js",
     "scripts": {
+        "prestart": "node scripts/clear-auth.js",
         "start": "node src/index.js",
         "dev": "nodemon src/index.js",
-        "render": "node src/index.js"
+        "render": "npm run prestart && node src/index.js",
+        "clean": "node scripts/clear-auth.js",
+        "postinstall": "node scripts/clear-auth.js"
     },
     "keywords": [
         "whatsapp",
