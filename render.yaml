@@ -13,17 +13,19 @@ services:
       - key: NODE_VERSION
         value: 18
       - key: BOT_NUMBER
-        value: 09043650490
+        value: 2349043650490
       - key: PREFIX
         value: .
       - key: ADMIN_NUMBERS
-        value: 09043650490
+        value: 2349043650490
       - key: ENABLE_AI
         value: false
       - key: FORCE_NEW_AUTH
         value: true
+      - key: AUTO_PAIR
+        value: true
       - key: AUTH_CLEAR_SECRET
-        generateValue: true  # This generates a random secret
+        generateValue: true
       - key: RENDER_DEPLOY
         value: true
 

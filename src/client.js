@@ -14,9 +14,9 @@ const pino = require('pino');
 const config = require('../config');
 const qrcode = require('qrcode-terminal');
 
-// Create logger with custom level to ignore certain errors
+// Create logger
 const logger = pino({ 
-    level: 'warn', // Only show warnings and errors
+    level: 'warn',
     transport: {
         target: 'pino-pretty',
         options: {
@@ -31,6 +31,9 @@ const msgRetryCounterCache = new NodeCache();
 
 // Authentication folder
 const authFolder = path.join(process.cwd(), 'auth_info');
+
+// Store pairing handler reference
+let pairingHandler = null;
 
 async function connectToWhatsApp() {
     try {
@@ -55,7 +58,6 @@ async function connectToWhatsApp() {
             
             // Add this to ignore decryption errors
             shouldIgnoreJid: (jid) => {
-                // Ignore decryption errors for these types
                 return jid === 'status@broadcast' || jid.includes('@lid');
             }
         });
@@ -65,17 +67,23 @@ async function connectToWhatsApp() {
             const { connection, lastDisconnect, qr } = update;
             
             if (qr) {
-                console.log(chalk.green('\n📲 Scan this QR code with your WhatsApp to connect CHEEMY-BOT:'));
-                console.log(chalk.yellow('   (Make sure no other device is connected)\n'));
+                // Show both QR and instructions for phone pairing
+                console.log(chalk.green('\n📲 ==========================================='));
+                console.log(chalk.green('📲 OPTION 1: SCAN QR CODE'));
+                console.log(chalk.green('==========================================='));
                 qrcode.generate(qr, { small: true });
-                console.log(chalk.cyan('\n👑 Waiting for Master Cheema to scan...\n'));
+                
+                console.log(chalk.cyan('\n📱 ==========================================='));
+                console.log(chalk.cyan('📱 OPTION 2: USE PHONE NUMBER'));
+                console.log(chalk.cyan('==========================================='));
+                console.log(chalk.yellow('1. Send .pair command to bot (once connected)'));
+                console.log(chalk.yellow('2. Or wait for bot to connect via QR first'));
+                console.log(chalk.yellow('3. Then use phone number for future connections'));
+                console.log(chalk.cyan('===========================================\n'));
             }
             
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const errorMessage = lastDisconnect?.error?.message || 'unknown reason';
-                
-                // Don't show the full error, just a simple message
                 console.log(chalk.yellow('🔄 Connection reconnecting...'));
                 
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
@@ -83,7 +91,7 @@ async function connectToWhatsApp() {
                 if (shouldReconnect) {
                     setTimeout(() => connectToWhatsApp(), 5000);
                 } else {
-                    console.log(chalk.red('🚫 Logged out. Delete auth folder and scan again.'));
+                    console.log(chalk.red('🚫 Logged out. Use .pair command to reconnect with phone number.'));
                 }
             } else if (connection === 'open') {
                 console.log(chalk.green('✅ CHEEMY-BOT connected successfully!'));
@@ -91,13 +99,21 @@ async function connectToWhatsApp() {
                 console.log(chalk.cyan(`🤖 Bot Name: CHEEMY-BOT`));
                 console.log(chalk.cyan(`📱 Bot Number: ${sock.user?.id?.split(':')[0] || 'Unknown'}`));
                 console.log(chalk.cyan(`🔧 Prefix: ${config.prefix}`));
+                
+                // Show phone pairing instructions now that bot is connected
+                console.log(chalk.green('\n📱 ==========================================='));
+                console.log(chalk.green('📱 PHONE NUMBER PAIRING READY'));
+                console.log(chalk.green('==========================================='));
+                console.log(chalk.yellow('Send this command to the bot:'));
+                console.log(chalk.cyan(`.pair ${config.ownerNumber[0]}`));
+                console.log(chalk.green('===========================================\n'));
             }
         });
 
         // Save credentials
         sock.ev.on('creds.update', saveCreds);
 
-        // Handle messages - with error suppression
+        // Handle messages
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
             try {
                 if (type === 'notify') {
@@ -112,7 +128,7 @@ async function connectToWhatsApp() {
             }
         });
 
-        // Ignore all decryption errors
+        // Ignore decryption errors
         sock.ev.on('messages.update', () => {});
         sock.ev.on('message-receipt.update', () => {});
         sock.ev.on('messages.reaction', () => {});

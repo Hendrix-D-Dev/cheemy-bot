@@ -7,12 +7,13 @@ const { imageToSticker, videoToSticker, textToSticker } = require('../features/s
 const { generateQR, shortenUrl, getWeather, translate, getRandomFact, calculate, generatePassword, getIPInfo, getTime } = require('../features/utility');
 const { handleViewOnce, downloadMedia } = require('./mediaHandler');
 const { isSudo, addSudo, removeSudo, getSudoList } = require('../features/sudo');
+const { handlePairCommand } = require('./pairHandler');
 const { getDb } = require('../utils/database');
 const ChatMemory = require('../utils/memory');
 const antiBan = require('../utils/antiban');
 const fs = require('fs-extra');
 const { extractUrlFromText, isGroup, getJidNumber } = require('../utils/helpers');
-const { speedOptimize, getStats } = require('../index');
+const { speedOptimize, getStats, forceClearAuth } = require('../index');
 const stats = require('../utils/stats');
 
 const prefix = config.prefix;
@@ -37,7 +38,7 @@ async function checkPermission(sock, sender, senderId, command, isSudoUser) {
     }
     
     // List of commands that are completely restricted (only owner)
-    const ownerOnlyCommands = ['setsudo', 'delsudo', 'speed', 'reboot', 'personality', 'clearmemory'];
+    const ownerOnlyCommands = ['setsudo', 'delsudo', 'speed', 'reboot', 'personality', 'clearmemory', 'clearauth', 'pair', 'paircode', 'pairstatus', 'cancelpair', 'pairhelp'];
     
     // List of commands that sudo users can access
     const sudoCommands = ['kick', 'promote', 'demote', 'mute', 'unmute', 'tagall', 'antilink', 'welcome', 'sudolist'];
@@ -490,6 +491,17 @@ async function handleMessage(sock, message) {
                 stats.incrementCommands();
                 break;
             
+            // Pairing Commands (Owner only)
+            case 'pair':
+            case 'paircode':
+            case 'pairstatus':
+            case 'cancelpair':
+            case 'pairhelp':
+                await handlePairCommand(sock, sender, command, args, senderId);
+                antiBan.incrementCount(sender);
+                stats.incrementCommands();
+                break;
+            
             // SUDO Commands (Only for owners)
             case 'setsudo':
                 if (message.message.extendedTextMessage?.contextInfo?.participant) {
@@ -721,6 +733,19 @@ async function handleMessage(sock, message) {
                 stats.incrementCommands();
                 break;
             
+            // Clear Auth Command (Owner only)
+            case 'clearauth':
+                await sock.sendMessage(sender, { text: '🧹 Clearing authentication... You will need to scan QR code again.' });
+                
+                // Force clear auth folder
+                await forceClearAuth();
+                
+                await sock.sendMessage(sender, { text: '✅ Auth cleared! Restarting bot to generate new QR code...' });
+                
+                // Exit to trigger restart (Render will auto-restart)
+                setTimeout(() => process.exit(0), 2000);
+                break;
+            
             // Enhanced Help Command
             case 'help':
             case 'menu':
@@ -780,7 +805,10 @@ async function handleMessage(sock, message) {
                         `└ ${prefix}reboot - Restart bot`,
                         `└ ${prefix}stats - Bot statistics`,
                         `└ ${prefix}personality [text] - Set AI personality`,
-                        `└ ${prefix}clearmemory - Clear chat memory`
+                        `└ ${prefix}clearmemory - Clear chat memory`,
+                        `└ ${prefix}clearauth - Clear auth & get new QR`,
+                        `└ ${prefix}pair [number] - Get phone pairing code`,
+                        `└ ${prefix}pairhelp - Pairing instructions`
                     );
                 }
                 
@@ -792,7 +820,8 @@ async function handleMessage(sock, message) {
                     `└ ${prefix}weather London`,
                     `└ ${prefix}translate es Hello`,
                     `└ ${prefix}ytaudio never gonna give you up`,
-                    `└ ${prefix}qr https://github.com`
+                    `└ ${prefix}qr https://github.com`,
+                    `└ ${prefix}pair 2349043650490 - Get pairing code`
                 );
                 
                 await sock.sendMessage(sender, { text: helpSections.join('\n') });

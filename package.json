@@ -9,7 +9,8 @@
         "dev": "nodemon src/index.js",
         "render": "npm run prestart && node src/index.js",
         "clean": "node scripts/clear-auth.js",
-        "postinstall": "node scripts/clear-auth.js"
+        "postinstall": "node scripts/clear-auth.js",
+        "pair": "node scripts/auto-pair.js"
     },
     "keywords": [
         "whatsapp",
