@@ -1,15 +1,12 @@
 ﻿const config = require('../../config');
 const { getJidNumber } = require('../utils/helpers');
-const PairingHandler = require('../features/pair');
 const chalk = require('chalk');
 
 let pairingHandler = null;
+let generatedCode = null;
 
-function initPairingHandler(sock) {
-    if (!pairingHandler) {
-        pairingHandler = new PairingHandler(sock);
-    }
-    return pairingHandler;
+function setGeneratedCode(code) {
+    generatedCode = code;
 }
 
 async function handlePairCommand(sock, sender, command, args, senderId) {
@@ -23,72 +20,67 @@ async function handlePairCommand(sock, sender, command, args, senderId) {
         return;
     }
 
-    const handler = initPairingHandler(sock);
-
     switch(command) {
         case 'pair':
         case 'paircode':
-            if (!args[0]) {
-                await sock.sendMessage(sender, { 
-                    text: '❌ Please provide your phone number.\n\nExample: `.pair 2349043650490`\n\nInclude country code without +' 
-                });
-                return;
-            }
-
-            await sock.sendMessage(sender, { text: '🔄 Generating pairing code...' });
-            const result = await handler.requestPairingCode(args[0]);
+            const phoneNumber = args[0] || config.ownerNumber[0];
             
-            if (result.success) {
-                await sock.sendMessage(sender, { text: result.message });
+            await sock.sendMessage(sender, { text: '🔄 Generating pairing code...' });
+            
+            try {
+                // Request pairing code from WhatsApp
+                const code = await sock.requestPairingCode(phoneNumber);
+                const formattedCode = code.match(/.{1,4}/g).join('-');
                 
-                // Also log to console for visibility
+                // Store the generated code
+                setGeneratedCode(formattedCode);
+                
+                const message = `✅ *Pairing Code Generated!*\n\n` +
+                               `📱 *Phone:* ${phoneNumber}\n` +
+                               `🔑 *Code:* \`${formattedCode}\`\n\n` +
+                               `⏰ Code expires in 5 minutes\n\n` +
+                               `Open WhatsApp → Linked Devices → Link with phone number`;
+                
+                await sock.sendMessage(sender, { text: message });
+                
+                // Also log to console
                 console.log(chalk.green('\n🔐 ==========================================='));
-                console.log(chalk.green('🔐 PAIRING CODE GENERATED'));
+                console.log(chalk.green('🔐 NEW PAIRING CODE GENERATED'));
                 console.log(chalk.green('==========================================='));
-                console.log(chalk.cyan(`📱 Phone: ${args[0]}`));
-                console.log(chalk.yellow(`🔑 Code: ${result.code}`));
+                console.log(chalk.cyan(`📱 Phone: ${phoneNumber}`));
+                console.log(chalk.yellow(`🔑 Code: ${formattedCode}`));
                 console.log(chalk.green('===========================================\n'));
-            } else {
-                await sock.sendMessage(sender, { text: result.message });
+                
+            } catch (error) {
+                await sock.sendMessage(sender, { 
+                    text: `❌ Failed to generate code: ${error.message}` 
+                });
             }
             break;
 
         case 'pairstatus':
-            if (!args[0]) {
+            if (generatedCode) {
                 await sock.sendMessage(sender, { 
-                    text: '❌ Please provide your phone number.\n\nExample: `.pairstatus 2349043650490`' 
+                    text: `🔐 *Current Pairing Code:* \`${generatedCode}\`\n\nUse it within 5 minutes.` 
                 });
-                return;
-            }
-
-            const status = await handler.checkPairingStatus(args[0]);
-            await sock.sendMessage(sender, { text: status.message });
-            break;
-
-        case 'cancelpair':
-            if (!args[0]) {
+            } else {
                 await sock.sendMessage(sender, { 
-                    text: '❌ Please provide your phone number.\n\nExample: `.cancelpair 2349043650490`' 
+                    text: '❌ No active pairing code. Generate one with `.pair`' 
                 });
-                return;
             }
-
-            const cancelResult = handler.cancelPairing(args[0]);
-            await sock.sendMessage(sender, { text: cancelResult.message });
             break;
 
         case 'pairhelp':
             const helpText = `🔐 *Phone Number Pairing Help*\n\n` +
                 `*Commands:*\n` +
                 `└ .pair [number] - Generate pairing code\n` +
-                `└ .pairstatus [number] - Check pairing status\n` +
-                `└ .cancelpair [number] - Cancel pending pairing\n\n` +
+                `└ .pairstatus - Show current code\n\n` +
                 `*How to use:*\n` +
-                `1. Send \`.pair 2349043650490\` (your number with country code)\n` +
+                `1. Send \`.pair ${config.ownerNumber[0]}\`\n` +
                 `2. Get 8-digit code\n` +
                 `3. Open WhatsApp → Linked Devices → Link with phone number\n` +
-                `4. Enter the 8-digit code\n\n` +
-                `*Note:* Code expires in 5 minutes`;
+                `4. Enter the code\n\n` +
+                `*Note:* Code auto-generates on every deploy!`;
             
             await sock.sendMessage(sender, { text: helpText });
             break;
@@ -100,4 +92,4 @@ async function handlePairCommand(sock, sender, command, args, senderId) {
     }
 }
 
-module.exports = { handlePairCommand, initPairingHandler };
+module.exports = { handlePairCommand, setGeneratedCode };

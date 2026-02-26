@@ -4,7 +4,7 @@ const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysocket
 const fs = require('fs-extra');
 const path = require('path');
 const chalk = require('chalk');
-const qrcode = require('qrcode-terminal');
+require('dotenv').config();
 
 const PHONE_NUMBER = process.env.BOT_NUMBER || '2349043650490';
 const AUTH_FOLDER = path.join(process.cwd(), 'auth_info');
@@ -39,22 +39,22 @@ async function autoPair() {
             if (qr) {
                 console.log(chalk.green('\n📱 OPTION 1: SCAN QR CODE'));
                 console.log(chalk.green('==========================================='));
+                
+                // Generate QR in terminal
+                const qrcode = require('qrcode-terminal');
                 qrcode.generate(qr, { small: true });
                 
                 console.log(chalk.cyan('\n📱 OPTION 2: USE PHONE NUMBER'));
                 console.log(chalk.cyan('==========================================='));
-                console.log(chalk.yellow(`Send this command to the bot once connected:`));
-                console.log(chalk.white(`.pair ${PHONE_NUMBER}`));
-                console.log(chalk.cyan('===========================================\n'));
-            }
-
-            if (connection === 'open') {
-                console.log(chalk.green('✅ Bot connected successfully!'));
-                console.log(chalk.magenta(`📱 Bot Number: ${sock.user?.id?.split(':')[0]}`));
                 
-                // Generate pairing code automatically
+                // Try to generate pairing code
                 try {
-                    console.log(chalk.yellow('\n🔄 Generating pairing code...'));
+                    console.log(chalk.yellow('🔄 Generating pairing code...'));
+                    
+                    // Wait a moment for the socket to be ready
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    
+                    // Request pairing code
                     const code = await sock.requestPairingCode(PHONE_NUMBER);
                     const formattedCode = code.match(/.{1,4}/g).join('-');
                     
@@ -67,16 +67,31 @@ async function autoPair() {
                     console.log(chalk.white('Open WhatsApp → Linked Devices → Link with phone number'));
                     console.log(chalk.white(`Enter code: ${formattedCode}\n`));
                     
+                    // Write code to a file for reference
+                    await fs.writeFile('./pairing-code.txt', 
+                        `Pairing Code for ${PHONE_NUMBER}: ${formattedCode}\nGenerated: ${new Date().toISOString()}`);
+                    
                 } catch (pairError) {
-                    console.log(chalk.yellow('⚠️ Could not auto-generate pairing code.'));
-                    console.log(chalk.yellow(`Use .pair ${PHONE_NUMBER} command instead.`));
+                    console.log(chalk.yellow('\n⚠️ Could not auto-generate pairing code.'));
+                    console.log(chalk.yellow('Please use QR code or wait for bot to connect.'));
+                    console.log(chalk.yellow(`Error: ${pairError.message}`));
                 }
-                
+            }
+
+            if (connection === 'open') {
+                console.log(chalk.green('\n✅ Bot connected successfully!'));
+                console.log(chalk.magenta(`📱 Bot Number: ${sock.user?.id?.split(':')[0]}`));
                 process.exit(0);
             }
         });
 
         sock.ev.on('creds.update', saveCreds);
+
+        // Timeout after 30 seconds
+        setTimeout(() => {
+            console.log(chalk.yellow('\n⏰ Connection timeout. Exiting...'));
+            process.exit(1);
+        }, 30000);
 
     } catch (error) {
         console.error(chalk.red('Auto-pair failed:'), error);

@@ -28,12 +28,9 @@ const logger = pino({
 });
 
 const msgRetryCounterCache = new NodeCache();
-
-// Authentication folder
 const authFolder = path.join(process.cwd(), 'auth_info');
-
-// Store pairing handler reference
-let pairingHandler = null;
+let pairingCodeGenerated = false;
+let pairingCode = null;
 
 async function connectToWhatsApp() {
     try {
@@ -56,18 +53,17 @@ async function connectToWhatsApp() {
             emitOwnEvents: true,
             generateHighQualityLinkPreview: false,
             
-            // Add this to ignore decryption errors
             shouldIgnoreJid: (jid) => {
                 return jid === 'status@broadcast' || jid.includes('@lid');
             }
         });
 
         // Handle connection updates
-        sock.ev.on('connection.update', (update) => {
+        sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
-            if (qr) {
-                // Show both QR and instructions for phone pairing
+            if (qr && !pairingCodeGenerated) {
+                // Show both QR and pairing code
                 console.log(chalk.green('\n📲 ==========================================='));
                 console.log(chalk.green('📲 OPTION 1: SCAN QR CODE'));
                 console.log(chalk.green('==========================================='));
@@ -76,10 +72,34 @@ async function connectToWhatsApp() {
                 console.log(chalk.cyan('\n📱 ==========================================='));
                 console.log(chalk.cyan('📱 OPTION 2: USE PHONE NUMBER'));
                 console.log(chalk.cyan('==========================================='));
-                console.log(chalk.yellow('1. Send .pair command to bot (once connected)'));
-                console.log(chalk.yellow('2. Or wait for bot to connect via QR first'));
-                console.log(chalk.yellow('3. Then use phone number for future connections'));
-                console.log(chalk.cyan('===========================================\n'));
+                
+                // Generate pairing code automatically
+                try {
+                    console.log(chalk.yellow('🔄 Generating pairing code...'));
+                    
+                    // Get owner's phone number from config
+                    const phoneNumber = config.ownerNumber[0];
+                    
+                    if (phoneNumber) {
+                        // Request pairing code from WhatsApp
+                        const code = await sock.requestPairingCode(phoneNumber);
+                        pairingCode = code.match(/.{1,4}/g).join('-');
+                        
+                        console.log(chalk.green('\n🔐 ==========================================='));
+                        console.log(chalk.green('🔐 PAIRING CODE READY'));
+                        console.log(chalk.green('==========================================='));
+                        console.log(chalk.cyan(`📱 Phone: ${phoneNumber}`));
+                        console.log(chalk.yellow(`🔑 Code: ${pairingCode}`));
+                        console.log(chalk.green('===========================================\n'));
+                        console.log(chalk.white('Open WhatsApp → Linked Devices → Link with phone number'));
+                        console.log(chalk.white(`Enter code: ${pairingCode}\n`));
+                        
+                        pairingCodeGenerated = true;
+                    }
+                } catch (pairError) {
+                    console.log(chalk.red('❌ Failed to generate pairing code:'), pairError.message);
+                    console.log(chalk.yellow('Please use QR code or send .pair command after connection.'));
+                }
             }
             
             if (connection === 'close') {
@@ -100,13 +120,15 @@ async function connectToWhatsApp() {
                 console.log(chalk.cyan(`📱 Bot Number: ${sock.user?.id?.split(':')[0] || 'Unknown'}`));
                 console.log(chalk.cyan(`🔧 Prefix: ${config.prefix}`));
                 
-                // Show phone pairing instructions now that bot is connected
-                console.log(chalk.green('\n📱 ==========================================='));
-                console.log(chalk.green('📱 PHONE NUMBER PAIRING READY'));
-                console.log(chalk.green('==========================================='));
-                console.log(chalk.yellow('Send this command to the bot:'));
-                console.log(chalk.cyan(`.pair ${config.ownerNumber[0]}`));
-                console.log(chalk.green('===========================================\n'));
+                // Show pairing code again if it was generated
+                if (pairingCode) {
+                    console.log(chalk.green('\n🔐 ==========================================='));
+                    console.log(chalk.green('🔐 PAIRING CODE (Still valid)'));
+                    console.log(chalk.green('==========================================='));
+                    console.log(chalk.cyan(`📱 Phone: ${config.ownerNumber[0]}`));
+                    console.log(chalk.yellow(`🔑 Code: ${pairingCode}`));
+                    console.log(chalk.green('===========================================\n'));
+                }
             }
         });
 
@@ -128,7 +150,6 @@ async function connectToWhatsApp() {
             }
         });
 
-        // Ignore decryption errors
         sock.ev.on('messages.update', () => {});
         sock.ev.on('message-receipt.update', () => {});
         sock.ev.on('messages.reaction', () => {});
@@ -141,4 +162,9 @@ async function connectToWhatsApp() {
     }
 }
 
-module.exports = { connectToWhatsApp };
+// Function to get the generated pairing code (for other modules)
+function getPairingCode() {
+    return pairingCode;
+}
+
+module.exports = { connectToWhatsApp, getPairingCode };
